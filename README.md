@@ -702,36 +702,56 @@ Authorization failure example:
 
 ---
 
-# Group G — Query Engine Module
+# Group G — Query Engine Module 🚀
 
-**Overview:** The Query Engine is the core of the QueryMe platform. It is responsible for receiving student SQL queries, validating them for security, executing them in a timed sandbox, and grading the results against an answer key.
+The **Query Engine** is the orchestration heart of the QueryMe platform. It handles secure SQL execution, validation, sandboxing, and automated grading.
 
-## Technical Tasks
+---
 
-- **Query Validation**: Regex-based blocklist filtering to prevent destructive SQL operations.
-- **Sandboxed Execution**: Hard-timeout (10s) query execution with restricted schema access.
-- **Result-Set Comparison**: Order-insensitive and type-normalized comparison of student output against teacher reference keys.
-- **Scoring**: Full marks for exact data matches, and optional **Partial Marks** (50%) for row-count matches.
+## 📡 API Endpoints
 
-## Endpoints
-
-### Submit a Query
-```
-POST /api/query/submit
-Authorization: Bearer <token>
-```
+### 1. Run Query (Live Execution)
+`POST /api/query/run`
+Used for the student's live SQL editor. It executes the query and returns the raw data rows without creating a permanent submission or score.
 
 **Request Body:**
 ```json
 {
-  "examId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
-  "questionId": "e8aaee82-f787-4fab-93fa-6fbc1a1e8530",
-  "studentId": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
-  "query": "SELECT * FROM students"
+  "examId": "...",
+  "studentId": "...",
+  "query": "SELECT * FROM students;"
 }
 ```
 
-**Response `200 OK`:**
+**Success Response (`200 OK`):**
+```json
+{
+  "resultRows": [
+    { "id": 1, "name": "Alice" },
+    { "id": 2, "name": "Bob" }
+  ],
+  "columnNames": ["id", "name"],
+  "executionError": null
+}
+```
+
+---
+
+### 2. Submit Query (Final scoring)
+`POST /api/query/submit`
+Saves the student's query to the database, compares it against the answer key, and calculates the score.
+
+**Request Body:**
+```json
+{
+  "examId": "...",
+  "questionId": "...",
+  "studentId": "...",
+  "query": "SELECT * FROM students;"
+}
+```
+
+**Success Response (`200 OK`):**
 ```json
 {
   "submissionId": "...",
@@ -743,27 +763,29 @@ Authorization: Bearer <token>
 
 ---
 
-## Testing Your Implementation (Group G)
+### 3. Get Submission History
+`GET /api/query/submissions/student/{studentId}/exam/{examId}`
+Retrieves all queries submitted by a specific student for a specific exam. (Requires TEACHER or ADMIN role).
 
-Follow these steps in Postman to verify your module is "Demo-Ready":
+**Success Response (`200 OK`):** Array of Submission objects.
 
-### 1. Test Security (Blocklist)
-Submit a query like `DROP TABLE students;`.
-- **Expected**: `executionError` should contain "Validation Error" and name the blocked keyword.
+---
 
-### 2. Test Robustness (Numeric Matching)
-If the answer key has `1` but the student query returns `1.0`, our engine will still mark it as **Correct**.
+## 🔒 Security & Engine Features
 
-### 3. Test Fairness (Order-Insensitivity)
-Submit a query like `SELECT * FROM students` and ensure it matches the answer key even if the rows or columns are slightly rearranged.
+- **SQL Security**: Rejects `DROP`, `DELETE`, `UPDATE`, etc., via `QueryValidator`.
+- **Performance**: Enforces a **10-second hard timeout** on all student queries.
+- **Fair Grading**: Order-insensitive comparison and numeric normalization.
+- **Partial Credit**: 50% marks awarded if row count matches but data is mismatched.
 
-### 4. Test Performance (Timeout)
-Submit `SELECT pg_sleep(11);`.
-- **Expected**: `executionError` should say "Timeout Error: Query exceeded 10s execution limit."
+---
 
-### 5. Test Partial Marks
-If a question has `partialMarks: true`, try a query that returns the correct number of rows but wrong data.
-- **Expected**: `score` should be **50%** of the question's marks.
+## 🧪 Postman Verification Steps
+
+1. **Test Live Editor**: Call `/api/query/run`. Verify `resultRows` shows data.
+2. **Test Security**: Try `DELETE FROM students;`. Verify `executionError` returns a blocklist message.
+3. **Test Grading**: Call `/api/query/submit`. Verify `isCorrect: true` and a full `score`.
+4. **Test History**: Call the `GET` endpoint to see all your previous attempts.
 
 ---
 *For issues related to the Query Engine, contact Group G.*

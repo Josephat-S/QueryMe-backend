@@ -14,9 +14,12 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.QueryTimeoutException;
 import org.springframework.stereotype.Service;
-
+import com.year2.queryme.model.dto.RunQueryResponse;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 @Slf4j
 @Service
@@ -101,5 +104,44 @@ public class QueryServiceImpl implements QueryService {
             .score(submission.getScore())
             .executionError(submission.getExecutionError())
             .build();
+    }
+
+    @Override
+    public RunQueryResponse runQuery(SubmissionRequest request) {
+        log.info("Running query (trial) for student {} exam {}", request.getStudentId(), request.getExamId());
+        try {
+            // 1. Validate blocklist
+            queryValidator.validate(request.getQuery());
+
+            // 2. Get Sandbox connection details
+            SandboxConnectionInfo sandboxInfo = sandboxService.getSandboxConnectionDetails(
+                request.getExamId(), request.getStudentId());
+
+            // 3. Executed Sandboxed Query
+            List<Map<String, Object>> rows = queryExecutor.executeSandboxedQuery(
+                sandboxInfo.schemaName(), request.getQuery(), 10);
+            
+            // 4. Extract column names from the first row if available
+            List<String> columns = rows.isEmpty() ? new ArrayList<>() 
+                : new ArrayList<>(rows.get(0).keySet());
+
+            return RunQueryResponse.builder()
+                .resultRows(rows)
+                .columnNames(columns)
+                .build();
+                
+        } catch (Exception e) {
+            log.error("Live Execution Error", e);
+            return RunQueryResponse.builder()
+                .executionError(e.getMessage())
+                .resultRows(Collections.emptyList())
+                .columnNames(Collections.emptyList())
+                .build();
+        }
+    }
+
+    @Override
+    public List<Submission> getSubmissionsByExamAndStudent(UUID examId, UUID studentId) {
+        return submissionRepository.findByStudentIdAndExamId(studentId, examId);
     }
 }
