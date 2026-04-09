@@ -702,80 +702,123 @@ Authorization failure example:
 
 ---
 
-# Group G — Query Engine Module 🚀
+# Group G — Query Engine Module
 
-The **Query Engine** is the orchestration heart of the QueryMe platform. It handles secure SQL execution, validation, sandboxing, and automated grading.
+**Overview:** The Query Engine is the most technically complex module in the QueryMe platform. It receives student SQL queries, validates them against a security blocklist, routes them to the student's isolated sandbox schema, executes them with a hard timeout, compares the output against the teacher's answer key, and produces a score. All submissions are persisted to the database for history tracking.
 
----
+## Base URL
 
-## 📡 API Endpoints
-
-### 1. Run Query (Live Execution)
-`POST /api/query/run`
-Used for the student's live SQL editor. It executes the query and returns the raw data rows without creating a permanent submission or score.
-
-**Request Body:**
-```json
-{
-  "examId": "...",
-  "studentId": "...",
-  "query": "SELECT * FROM students;"
-}
+```text
+http://localhost:8084/api/query
 ```
 
-**Success Response (`200 OK`):**
-```json
-{
-  "resultRows": [
-    { "id": 1, "name": "Alice" },
-    { "id": 2, "name": "Bob" }
-  ],
-  "columnNames": ["id", "name"],
-  "executionError": null
-}
+All endpoints require a valid JWT token:
+
+```text
+Authorization: Bearer <token>
 ```
 
 ---
 
-### 2. Submit Query (Final scoring)
-`POST /api/query/submit`
-Saves the student's query to the database, compares it against the answer key, and calculates the score.
+## Technical Implementation
+
+| Component | Class | Description |
+|---|---|---|
+| Blocklist Validator | `QueryValidator.java` | Regex-based filtering — rejects destructive SQL keywords |
+| Sandboxed Executor | `QueryExecutor.java` | Executes SQL inside student's schema with a 10-second hard timeout |
+| Result-Set Comparator | `ResultSetComparator.java` | Order-insensitive, type-normalized row-by-row comparison |
+| Score Calculator | `QueryServiceImpl.java` | Full marks, partial marks (50%), or zero |
+| Submission Entity | `Submission.java` | JPA entity persisted to `submissions` table on every submit |
+
+---
+
+## Endpoints
+
+### 1. Submit a Query (Graded)
+
+Validates, executes, grades, and saves the student's SQL submission.
+
+```text
+POST /api/query/submit
+Authorization: Bearer <token>
+Content-Type: application/json
+```
 
 **Request Body:**
+
 ```json
 {
-  "examId": "...",
-  "questionId": "...",
-  "studentId": "...",
-  "query": "SELECT * FROM students;"
+  "examId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "questionId": "e8aaee82-f787-4fab-93fa-6fbc1a1e8530",
+  "studentId": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+  "query": "SELECT * FROM employees WHERE department = 'Engineering'"
 }
 ```
 
-**Success Response (`200 OK`):**
+**Response `200 OK` — Correct answer:**
+
 ```json
 {
-  "submissionId": "...",
+  "submissionId": "a1b2c3d4-...",
   "isCorrect": true,
   "score": 10,
   "executionError": null
 }
 ```
 
+**Response `200 OK` — Wrong answer:**
+
+```json
+{
+  "submissionId": "a1b2c3d4-...",
+  "isCorrect": false,
+  "score": 0,
+  "executionError": null
+}
+```
+
+---
+
+### 2. Run a Query Live (No Submission Saved)
+
+Executes the student's SQL in their sandbox and returns the result set without saving or grading.
+
+```text
+POST /api/query/run
+Authorization: Bearer <token>
+Content-Type: application/json
+```
+
+**Request Body:**
+
+```json
+{
+  "examId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "studentId": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+  "query": "SELECT name, salary FROM employees ORDER BY salary DESC"
+}
+```
+
+**Response `200 OK`:** Result set with `columnNames` and `resultRows`.
+
 ---
 
 ### 3. Get Submission History
-`GET /api/query/submissions/student/{studentId}/exam/{examId}`
-Retrieves all queries submitted by a specific student for a specific exam. (Requires TEACHER or ADMIN role).
 
-**Success Response (`200 OK`):** Array of Submission objects.
+Returns all past submissions for a specific student on a specific exam.
+
+```text
+GET /api/query/submissions/student/{studentId}/exam/{examId}
+Authorization: Bearer <token>
+```
 
 ---
 
 ## 🔒 Security & Engine Features
 
-- **SQL Security**: Rejects `DROP`, `DELETE`, `UPDATE`, etc., via `QueryValidator`.
-- **Performance**: Enforces a **10-second hard timeout** on all student queries.
-- **Fair Grading**: Order-insensitive comparison and numeric normalization.
+- **SQL Security**: Rejects destructive keywords via `QueryValidator`.
+- **Performance**: Enforces a **10-second hard timeout**.
+- **Fair Grading**: Order-insensitive comparison and numeric normalization (`1.0 == 1`).
 - **Partial Credit**: 50% marks awarded if row count matches but data is mismatched.
 
 ---
@@ -783,9 +826,11 @@ Retrieves all queries submitted by a specific student for a specific exam. (Requ
 ## 🧪 Postman Verification Steps
 
 1. **Test Live Editor**: Call `/api/query/run`. Verify `resultRows` shows data.
-2. **Test Security**: Try `DELETE FROM students;`. Verify `executionError` returns a blocklist message.
-3. **Test Grading**: Call `/api/query/submit`. Verify `isCorrect: true` and a full `score`.
-4. **Test History**: Call the `GET` endpoint to see all your previous attempts.
+2. **Test Security**: Try `DELETE FROM students;`. Verify `executionError` returns blocklist message.
+3. **Test Grading**: Call `/api/query/submit`. Verify `isCorrect: true`.
+4. **Test History**: Call the `GET` endpoint to see previous attempts.
 
 ---
+
 *For issues related to the Query Engine, contact Group G.*
+
