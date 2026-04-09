@@ -10,5 +10,5 @@ import java.util.UUID;
 public interface QueryService {
     SubmissionResponse submitQuery(SubmissionRequest request);
     RunQueryResponse runQuery(SubmissionRequest request);
-    List<Submission> getSubmissionsByExamAndStudent(UUID examId, UUID studentId);
+    List<Submission> getSubmissionsByExamAndStudent(String examId, String studentId);
 }

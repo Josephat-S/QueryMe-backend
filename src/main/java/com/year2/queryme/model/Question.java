@@ -20,7 +20,7 @@ public class Question {
     private UUID id;
 
     @Column(name = "exam_id", nullable = false)
-    private UUID examId;
+    private String examId;
 
     @Column(nullable = false, columnDefinition = "TEXT")
     private String prompt;

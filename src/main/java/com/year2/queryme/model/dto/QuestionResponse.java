@@ -6,7 +6,7 @@ import java.util.UUID;
 @Data
 public class QuestionResponse {
     private UUID id;
-    private UUID examId;
+    private String examId;
     private String prompt;
     private String referenceQuery;
     private Integer marks;

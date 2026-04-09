@@ -10,7 +10,7 @@ spring:
     driver-class-name: org.postgresql.Driver
   jpa:
     hibernate:
-      ddl-auto: update
+      ddl-auto: none
     show-sql: true
     open-in-view: false
     properties:
@@ -25,3 +25,7 @@ queryme:
   app:
     jwtSecret: ${JWT_SECRET:QueryMeApplicationSecretKeyMustBeLongEnoughForHMACSHA256SignatureAlgorithm}
     jwtExpirationMs: ${JWT_EXPIRATION:86400000}
+
+logging:
+  level:
+    org.hibernate.tool.schema: TRACE

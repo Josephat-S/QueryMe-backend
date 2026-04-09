@@ -9,7 +9,7 @@ import java.util.UUID;
 
 @Repository
 public interface SubmissionRepository extends JpaRepository<Submission, UUID> {
-    List<Submission> findByStudentIdAndExamId(UUID studentId, UUID examId);
-    List<Submission> findByExamId(UUID examId);
+    List<Submission> findByStudentIdAndExamId(String studentId, String examId);
+    List<Submission> findByExamId(String examId);
     List<Submission> findByQuestionId(UUID questionId);
 }

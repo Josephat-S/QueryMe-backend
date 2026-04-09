@@ -22,7 +22,7 @@ public class ResultController {
      * Retrieves results for a specific session, subject to visibility logic.
      */
     @GetMapping("/session/{sessionId}")
-    public ResponseEntity<List<Result>> getStudentResults(@PathVariable UUID sessionId) {
+    public ResponseEntity<List<Result>> getStudentResults(@PathVariable String sessionId) {
         // Logic inside the service will check Group A's visibility settings
         List<Result> results = resultService.getResultsForStudent(sessionId);
         return ResponseEntity.ok(results);
@@ -35,7 +35,7 @@ public class ResultController {
      */
     @GetMapping("/exam/{examId}/dashboard")
     @PreAuthorize("hasRole('TEACHER')")
-    public ResponseEntity<List<Result>> getTeacherDashboard(@PathVariable UUID examId) {
+    public ResponseEntity<List<Result>> getTeacherDashboard(@PathVariable String examId) {
         /* * LOGIC FROM GROUP J (Auth):
          * The @PreAuthorize annotation uses the SecurityConfig and JWT filter
          * managed by Group J to ensure only Teachers access this data.

@@ -22,10 +22,10 @@ public class SandboxRegistry {
     private String schemaName;
 
     @Column(name = "exam_id", nullable = false)
-    private UUID examId;
+    private String examId;
 
     @Column(name = "student_id", nullable = false)
-    private UUID studentId;
+    private String studentId;
 
     @Column(name = "db_user", nullable = false, length = 100)
     private String dbUser;

@@ -5,8 +5,8 @@ import java.util.List;
 import java.util.UUID;
 
 public interface ResultService {
-    List<Result> getResultsForStudent(UUID sessionId);
+    List<Result> getResultsForStudent(String sessionId);
     void processNewSubmission(UUID submissionId);
-    List<Result> getResultsForTeacher(UUID examId);
+    List<Result> getResultsForTeacher(String examId);
     Result saveQueryResult(UUID submissionId, Integer score, Boolean isCorrect);
 }

@@ -20,10 +20,10 @@ public class Submission {
     private UUID id;
 
     @Column(name = "student_id", nullable = false)
-    private UUID studentId;
+    private String studentId;
 
     @Column(name = "exam_id", nullable = false)
-    private UUID examId;
+    private String examId;
 
     @Column(name = "question_id", nullable = false)
     private UUID questionId;

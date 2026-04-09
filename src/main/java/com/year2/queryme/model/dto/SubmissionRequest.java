@@ -5,8 +5,8 @@ import java.util.UUID;
 
 @Data
 public class SubmissionRequest {
-    private UUID examId;
+    private String examId;
     private UUID questionId;
-    private UUID studentId;
+    private String studentId;
     private String query;
 }

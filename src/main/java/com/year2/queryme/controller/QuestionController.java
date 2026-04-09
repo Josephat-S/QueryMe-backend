@@ -23,7 +23,7 @@ public class QuestionController {
     @PostMapping
     // @PreAuthorize("hasRole('TEACHER')") // <-- COMMENTED OUT FOR TESTING
     public ResponseEntity<QuestionResponse> addQuestionToExam(
-            @PathVariable UUID examId,
+            @PathVariable String examId,
             @Valid @RequestBody QuestionRequest request) {
 
         QuestionResponse response = questionService.createQuestion(examId, request);
@@ -32,7 +32,7 @@ public class QuestionController {
 
     @GetMapping
     // @PreAuthorize("hasAnyRole('TEACHER', 'STUDENT')") // <-- COMMENTED OUT FOR TESTING
-    public ResponseEntity<List<QuestionResponse>> getQuestionsForExam(@PathVariable UUID examId) {
+    public ResponseEntity<List<QuestionResponse>> getQuestionsForExam(@PathVariable String examId) {
         return ResponseEntity.ok(questionService.getQuestionsForExam(examId));
     }
 }

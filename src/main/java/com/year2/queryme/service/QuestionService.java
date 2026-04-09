@@ -7,6 +7,6 @@ import java.util.List;
 import java.util.UUID;
 
 public interface QuestionService {
-    QuestionResponse createQuestion(UUID examId, QuestionRequest request);
-    List<QuestionResponse> getQuestionsForExam(UUID examId);
+    QuestionResponse createQuestion(String examId, QuestionRequest request);
+    List<QuestionResponse> getQuestionsForExam(String examId);
 }

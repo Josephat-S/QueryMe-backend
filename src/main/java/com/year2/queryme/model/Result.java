@@ -19,10 +19,10 @@ public class Result {
     private UUID questionId; // From Group I [cite: 61]
 
     @Column(name = "session_id", nullable = false)
-    private UUID sessionId; // Links to the student's attempt [cite: 61]
+    private String sessionId; // Links to the student's attempt [cite: 61]
 
     @Column(name = "exam_id")
-    private UUID examId;
+    private String examId;
 
     private Integer score;
     private Integer maxScore;

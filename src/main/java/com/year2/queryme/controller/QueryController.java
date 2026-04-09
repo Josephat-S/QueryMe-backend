@@ -30,8 +30,8 @@ public class QueryController {
 
     @GetMapping("/submissions/student/{studentId}/exam/{examId}")
     public ResponseEntity<List<Submission>> getSubmissionHistory(
-            @PathVariable UUID studentId,
-            @PathVariable UUID examId) {
+            @PathVariable String studentId,
+            @PathVariable String examId) {
         return ResponseEntity.ok(queryService.getSubmissionsByExamAndStudent(examId, studentId));
     }
 }

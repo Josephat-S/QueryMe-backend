@@ -30,7 +30,7 @@ public class QuestionServiceImpl implements QuestionService {
 
     @Override
     @Transactional // If the query is invalid, it rolls back and doesn't save the question
-    public QuestionResponse createQuestion(UUID examId, QuestionRequest request) {
+    public QuestionResponse createQuestion(String examId, QuestionRequest request) {
         Question question = Question.builder()
                 .examId(examId)
                 .prompt(request.getPrompt())
@@ -50,7 +50,7 @@ public class QuestionServiceImpl implements QuestionService {
     }
 
     @Override
-    public List<QuestionResponse> getQuestionsForExam(UUID examId) {
+    public List<QuestionResponse> getQuestionsForExam(String examId) {
         return questionRepository.findByExamIdOrderByOrderIndexAsc(examId)
                 .stream()
                 .map(this::mapToResponse)

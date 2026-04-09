@@ -141,7 +141,7 @@ public class QueryServiceImpl implements QueryService {
     }
 
     @Override
-    public List<Submission> getSubmissionsByExamAndStudent(UUID examId, UUID studentId) {
+    public List<Submission> getSubmissionsByExamAndStudent(String examId, String studentId) {
         return submissionRepository.findByStudentIdAndExamId(studentId, examId);
     }
 }

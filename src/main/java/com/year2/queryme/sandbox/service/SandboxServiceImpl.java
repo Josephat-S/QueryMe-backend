@@ -43,11 +43,11 @@ public class SandboxServiceImpl implements SandboxService {
 
     @Override
     @Transactional
-    public String provisionSandbox(UUID examId, UUID studentId, String seedSql) {
+    public String provisionSandbox(String examId, String studentId, String seedSql) {
         examRepository.findById(examId.toString())
                 .orElseThrow(() -> new SandboxProvisioningException("Exam not found in registry"));
 
-        userRepository.findById(studentId)
+        userRepository.findById(UUID.fromString(studentId))
                 .orElseThrow(() -> new SandboxProvisioningException("Student not found in Auth registry"));
 
         String schemaName = "exam_" + examId.toString().replace("-", "") +
@@ -83,7 +83,7 @@ public class SandboxServiceImpl implements SandboxService {
 
     @Override
     @Transactional
-    public void teardownSandbox(UUID examId, UUID studentId) {
+    public void teardownSandbox(String examId, String studentId) {
         SandboxRegistry registry = registryRepo.findByExamIdAndStudentId(examId, studentId)
                 .orElseThrow(() -> new SandboxNotFoundException("Sandbox not found for given Exam and Student"));
 
@@ -96,7 +96,7 @@ public class SandboxServiceImpl implements SandboxService {
     }
 
     @Override
-    public SandboxConnectionInfo getSandboxConnectionDetails(UUID examId, UUID studentId) {
+    public SandboxConnectionInfo getSandboxConnectionDetails(String examId, String studentId) {
         SandboxRegistry registry = registryRepo.findByExamIdAndStudentId(examId, studentId)
                 .orElseThrow(() -> new SandboxNotFoundException("Sandbox not found"));
 

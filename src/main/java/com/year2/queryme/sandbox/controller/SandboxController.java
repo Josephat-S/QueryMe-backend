@@ -38,8 +38,8 @@ public class SandboxController {
 
     @GetMapping("/{examId}/students/{studentId}")
     public ResponseEntity<SandboxConnectionInfo> getSandboxDetails(
-            @PathVariable UUID examId,
-            @PathVariable UUID studentId
+            @PathVariable String examId,
+            @PathVariable String studentId
     ) {
         log.info("Sandbox details requested for examId={} studentId={}", examId, studentId);
         SandboxConnectionInfo connectionInfo = sandboxService.getSandboxConnectionDetails(examId, studentId);
@@ -48,8 +48,8 @@ public class SandboxController {
 
     @DeleteMapping("/{examId}/students/{studentId}")
     public ResponseEntity<ApiResponse> teardownSandbox(
-            @PathVariable UUID examId,
-            @PathVariable UUID studentId
+            @PathVariable String examId,
+            @PathVariable String studentId
     ) {
         log.info("Sandbox teardown requested for examId={} studentId={}", examId, studentId);
         sandboxService.teardownSandbox(examId, studentId);

@@ -11,6 +11,6 @@ import java.util.UUID;
 
 @Repository
 public interface SandboxRegistryRepo extends JpaRepository<SandboxRegistry, UUID> {
-    Optional<SandboxRegistry> findByExamIdAndStudentId(UUID examId, UUID studentId);
+    Optional<SandboxRegistry> findByExamIdAndStudentId(String examId, String studentId);
     List<SandboxRegistry> findByStatusAndExpiresAtBefore(String status, LocalDateTime time);
 }

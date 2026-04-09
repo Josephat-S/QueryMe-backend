@@ -19,7 +19,7 @@ public class ResultServiceImpl implements ResultService {
     // You need this to check visibility_mode and exam end times.
 
     @Override
-    public List<Result> getResultsForStudent(UUID sessionId) {
+    public List<Result> getResultsForStudent(String sessionId) {
         /* * LOGIC FROM GROUP A (Exam):
          * 1. Call examService.getSessionById(sessionId) to get the exam_id.
          * 2. Call examService.getExamSettings(examId) to retrieve 'visibility_mode'.
@@ -65,7 +65,7 @@ public class ResultServiceImpl implements ResultService {
     }
 
     @Override
-    public List<Result> getResultsForTeacher(UUID examId) {
+    public List<Result> getResultsForTeacher(String examId) {
         /* * LOGIC FROM GROUP F (User/Student):
          * When returning this list to the Teacher Dashboard (Group H),
          * you may need to call userService.getStudentDetails() to show
