@@ -8,9 +8,12 @@
 
 - [Project Setup](#project-setup)
 - [Group J — Auth Module](#group-j--auth-module)
+- [Group F — User & Student Management](#group-f--user--student-management)
 - [Group A — Exam Module](#group-a--exam-module)
+- [Group I — Question Module](#group-i--question-module)
 - [Group D — Sandbox Environment Module](#group-d--sandbox-environment-module)
 - [Group G — Query Engine Module](#group-g--query-engine-module)
+- [Group C — Results Module](#group-c--results-module)
 
 ---
 
@@ -306,6 +309,38 @@ String role  = currentUser.getAuthorities().iterator().next().getAuthority(); //
 
 ---
 
+# Group F — User & Student Management
+
+**Base URL:** `http://localhost:8084/api`
+
+## Endpoints
+
+### 1. Students
+
+| Method | Endpoint | Description | Request Body |
+|---|---|---|---|
+| `POST` | `/api/students/register` | Register new student | `{ "email", "password", "fullName", "courseId", "classGroupId" }` |
+| `PUT` | `/api/students/{id}` | Update student profile | `{ "fullName", ... }` |
+| `GET` | `/api/students` | List all students | |
+| `GET` | `/api/students/{id}` | Get student by ID | |
+
+### 2. Teachers
+
+| Method | Endpoint | Description | Request Body |
+|---|---|---|---|
+| `POST` | `/api/teachers/register` | Register new teacher | `{ "email", "password", "fullName" }` |
+| `PUT` | `/api/teachers/{id}` | Update teacher profile | `{ "fullName", ... }` |
+| `GET` | `/api/teachers` | List all teachers | |
+
+### 3. Courses
+
+| Method | Endpoint | Description | Request Body |
+|---|---|---|---|
+| `POST` | `/api/courses` | Create new course | `{ "name", ... }` |
+| `GET` | `/api/courses` | List all courses | |
+
+---
+
 # Group A — Exam Module
 
 **Base URL:** `http://localhost:8080/api/exams`
@@ -537,6 +572,33 @@ DELETE /api/exams/{examId}
 | `401 Unauthorized` | Missing or invalid JWT token |
 | `403 Forbidden` | Valid token but insufficient role |
 | `500` | Business rule violation — check `message` field |
+
+---
+
+# Group I — Question Module
+
+**Base URL:** `http://localhost:8084/api/exams/{examId}/questions`
+
+## Endpoints
+
+### 1. Add Question to Exam
+`POST /api/exams/{examId}/questions`
+
+**Request Body:**
+```json
+{
+  "prompt": "Write a query to select all...",
+  "referenceQuery": "SELECT * FROM ...",
+  "marks": 10,
+  "orderIndex": 1,
+  "partialMarks": false
+}
+```
+
+### 2. Get Questions for Exam
+`GET /api/exams/{examId}/questions`
+
+**Response:** List of questions (sanitized for students if needed).
 
 ---
 
@@ -829,6 +891,22 @@ Authorization: Bearer <token>
 2. **Test Security**: Try `DELETE FROM students;`. Verify `executionError` returns blocklist message.
 3. **Test Grading**: Call `/api/query/submit`. Verify `isCorrect: true`.
 4. **Test History**: Call the `GET` endpoint to see previous attempts.
+
+---
+
+# Group C — Results Module
+
+**Base URL:** `http://localhost:8084/api/results`
+
+## Endpoints
+
+### 1. View Student Results
+`GET /api/results/session/{sessionId}`
+Returns results for a specific session. Visibility is controlled by Exam settings (Immediate, End of Exam, Never).
+
+### 2. Teacher Dashboard
+`GET /api/results/exam/{examId}/dashboard`
+Returns the full results breakdown for all students in an exam. (Requires TEACHER role).
 
 ---
 
