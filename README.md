@@ -892,21 +892,6 @@ Authorization: Bearer <token>
 3. **Test Grading**: Call `/api/query/submit`. Verify `isCorrect: true`.
 4. **Test History**: Call the `GET` endpoint to see previous attempts.
 
----
-
-# Group C — Results Module
-
-**Base URL:** `http://localhost:8084/api/results`
-
-## Endpoints
-
-### 1. View Student Results
-`GET /api/results/session/{sessionId}`
-Returns results for a specific session. Visibility is controlled by Exam settings (Immediate, End of Exam, Never).
-
-### 2. Teacher Dashboard
-`GET /api/results/exam/{examId}/dashboard`
-Returns the full results breakdown for all students in an exam. (Requires TEACHER role).
 
 ---
 
