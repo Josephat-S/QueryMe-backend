@@ -17,7 +17,7 @@ import java.util.UUID;
 public class User {
 
     @Id
-    @GeneratedValue(strategy = GenerationType.AUTO)
+    @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
 
     @Column(unique = true, nullable = false)
@@ -32,6 +32,14 @@ public class User {
     @Enumerated(EnumType.STRING)
     @Column(length = 20, nullable = false)
     private UserTypes role;
+
+    @Column(name = "must_reset_password")
+    @Builder.Default
+    private Boolean mustResetPassword = false;
+
+    @OneToMany(mappedBy = "user", cascade = CascadeType.ALL, orphanRemoval = true)
+    @Builder.Default
+    private java.util.List<PasswordHistory> passwordHistories = new java.util.ArrayList<>();
 
     @Column(name = "created_at")
     @Builder.Default
