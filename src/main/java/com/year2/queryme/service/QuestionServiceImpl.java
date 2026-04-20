@@ -21,6 +21,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -40,6 +42,8 @@ public class QuestionServiceImpl implements QuestionService {
     private final ExamRepository examRepository;
     private final SandboxService sandboxService;
     private final QueryExecutor queryExecutor;
+    private final QueryValidator queryValidator;
+    private final SqlDialectAdapter sqlDialectAdapter;
     private final ObjectMapper objectMapper;
     private final CurrentUserService currentUserService;
     private final StudentRepository studentRepository;
@@ -71,17 +75,15 @@ public class QuestionServiceImpl implements QuestionService {
     }
 
     @Override
-    public List<QuestionResponse> getQuestionsForExam(UUID examId) {
+    public Page<QuestionResponse> getQuestionsForExam(UUID examId, Pageable pageable) {
         boolean includeReferenceQuery = !currentUserService.hasRole(UserTypes.STUDENT);
 
         if (currentUserService.hasRole(UserTypes.STUDENT)) {
             assertCurrentStudentCanAccessExam(examId);
         }
 
-        return questionRepository.findByExamIdOrderByOrderIndexAsc(examId)
-                .stream()
-                .map(question -> mapToResponse(question, includeReferenceQuery))
-                .collect(Collectors.toList());
+        return questionRepository.findByExamIdOrderByOrderIndexAsc(examId, pageable)
+                .map(question -> mapToResponse(question, includeReferenceQuery));
     }
 
     @Override
@@ -104,15 +106,24 @@ public class QuestionServiceImpl implements QuestionService {
         UUID realTeacherUserId = currentUserService.requireCurrentUserId();
 
         String schemaName = null;
+        boolean keepPreviewSandbox = false;
+        long startedAt = System.nanoTime();
 
         try {
             schemaName = sandboxService.provisionSandbox(examId, realTeacherUserId, exam.getSeedSql());
-            List<Map<String, Object>> rows = queryExecutor.executeSandboxedQuery(schemaName, referenceQuery, 5);
+            String adaptedReferenceQuery = sqlDialectAdapter.adaptForExecution(referenceQuery);
+            String executableReferenceQuery = sqlDialectAdapter.ensureFinalStatementReturnsRows(adaptedReferenceQuery);
 
-            List<String> columns = new ArrayList<>();
-            if (!rows.isEmpty()) {
-                columns.addAll(rows.get(0).keySet());
+            queryValidator.validate(executableReferenceQuery, schemaName, true);
+            SandboxExecutionResult executionResult = queryExecutor.executeSandboxedScript(
+                schemaName, executableReferenceQuery, 5, true);
+
+            if (!executionResult.hasResultSet()) {
+                throw new IllegalArgumentException("Reference query must return a result set");
             }
+
+            List<Map<String, Object>> rows = executionResult.rows();
+            List<String> columns = new ArrayList<>(executionResult.columns());
 
             String expectedColumnsJson = objectMapper.writeValueAsString(columns);
             String expectedRowsJson = objectMapper.writeValueAsString(rows);
@@ -123,13 +134,16 @@ public class QuestionServiceImpl implements QuestionService {
             answerKey.setExpectedRows(expectedRowsJson);
 
             answerKeyRepository.save(answerKey);
+            keepPreviewSandbox = true;
 
         } catch (JsonProcessingException e) {
             throw new RuntimeException("Failed to process answer key JSON", e);
+        } catch (IllegalArgumentException e) {
+            throw new RuntimeException("Invalid reference query: " + e.getMessage(), e);
         } catch (Exception e) {
             throw new RuntimeException("Error executing teacher's reference query: " + e.getMessage(), e);
         } finally {
-            if (schemaName != null) {
+            if (!keepPreviewSandbox && schemaName != null) {
                 try {
                     sandboxService.teardownSandbox(examId, realTeacherUserId);
                 } catch (RuntimeException cleanupException) {
@@ -137,6 +151,9 @@ public class QuestionServiceImpl implements QuestionService {
                             questionId, examId, cleanupException.getMessage());
                 }
             }
+
+            long durationMs = (System.nanoTime() - startedAt) / 1_000_000;
+            log.info("Answer key generation for question {} in exam {} completed in {} ms", questionId, examId, durationMs);
         }
     }
 

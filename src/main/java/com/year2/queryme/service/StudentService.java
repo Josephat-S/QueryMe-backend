@@ -4,6 +4,7 @@ import com.year2.queryme.model.ClassGroup;
 import com.year2.queryme.model.Course;
 import com.year2.queryme.model.Student;
 import com.year2.queryme.model.User;
+import com.year2.queryme.model.dto.StudentRegistrationRequest;
 import com.year2.queryme.repository.ClassGroupRepository;
 import com.year2.queryme.repository.CourseRepository;
 import com.year2.queryme.repository.StudentRepository;
@@ -16,7 +17,10 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 @Service
 public class StudentService {
@@ -39,41 +43,43 @@ public class StudentService {
     @Autowired
     private CurrentUserService currentUserService;
 
+    @Autowired
+    private PasswordService passwordService;
+
+    @Autowired
+    private EmailService emailService;
+
     @Transactional
     public Student registerStudent(String email, String password, String fullName,
                                    Long courseId, Long classGroupId, String studentNumber) {
-        // 1. Create User with BCrypt-encoded password
-        User user = User.builder()
-                .email(email)
-                .passwordHash(passwordEncoder.encode(password))
-                .role(UserTypes.STUDENT)
-                .name(fullName)
-                .build();
-        userRepository.save(user);
+        StudentRegistrationRequest request = new StudentRegistrationRequest();
+        request.setEmail(email);
+        request.setPassword(password);
+        request.setFullName(fullName);
+        request.setCourseId(courseId);
+        request.setClassGroupId(classGroupId);
+        request.setStudentNumber(studentNumber);
+        return registerStudent(request);
+    }
 
-        // 2. Get Course (optional at registration if from auth service)
-        Course course = (courseId != null) ? courseRepository.findById(courseId).orElse(null) : null;
+    @Transactional
+    public Student registerStudent(StudentRegistrationRequest request) {
+        StudentRegistrationRequest normalizedRequest = normalizeAndValidate(request, new HashSet<>(), new HashSet<>());
+        return createStudent(normalizedRequest);
+    }
 
-        // Split full name for shared DB legacy columns
-        String[] nameParts = fullName != null ? fullName.split(" ", 2) : new String[]{"Unknown", ""};
-        String firstName = nameParts[0];
-        String lastName = nameParts.length > 1 ? nameParts[1] : "";
+    @Transactional
+    public List<Student> registerStudents(List<StudentRegistrationRequest> requests) {
+        if (requests == null || requests.isEmpty()) {
+            throw new IllegalArgumentException("At least one student registration is required");
+        }
 
-        // 3. Create Student linked to User, Course and optional ClassGroup
-        Student student = Student.builder()
-                .fullName(fullName)
-                .firstName(firstName)
-                .lastName(lastName)
-                .registeredAt(LocalDateTime.now())
-                .studentNumber(studentNumber)
-                .user(user)
-                .course(course)
-                .classGroup(classGroupId != null
-                        ? classGroupRepository.findById(classGroupId).orElse(null)
-                        : null)
-                .build();
+        Set<String> seenEmails = new HashSet<>();
+        Set<String> seenStudentNumbers = new HashSet<>();
 
-        return studentRepository.save(student);
+        return requests.stream()
+                .map(request -> createStudent(normalizeAndValidate(request, seenEmails, seenStudentNumbers)))
+                .toList();
     }
 
     @Transactional
@@ -87,8 +93,14 @@ public class StudentService {
             throw new RuntimeException("Students can only update their own profile");
         }
 
-        if (isStudentCaller && (data.containsKey("courseId") || data.containsKey("classGroupId") || data.containsKey("student_number"))) {
-            throw new RuntimeException("Students cannot modify course, class group, or student number");
+        if (isStudentCaller && (data.containsKey("fullName")
+                || data.containsKey("name")
+                || data.containsKey("email")
+                || data.containsKey("courseId")
+                || data.containsKey("classGroupId")
+                || data.containsKey("student_number")
+                || data.containsKey("studentNumber"))) {
+            throw new RuntimeException("Students can only change their password");
         }
 
         if (data.containsKey("fullName")) {
@@ -105,8 +117,15 @@ public class StudentService {
         if (data.containsKey("password")) {
             User user = student.getUser();
             if (user != null) {
-                user.setPasswordHash(passwordEncoder.encode(data.get("password")));
+                String newPassword = data.get("password");
+                if (passwordService.isPasswordUsed(user, newPassword)) {
+                    throw new RuntimeException("Cannot reuse a previous password");
+                }
+                String hash = passwordEncoder.encode(newPassword);
+                user.setPasswordHash(hash);
+                user.setMustResetPassword(false);
                 userRepository.save(user);
+                passwordService.recordPassword(user, hash);
             }
         }
         if (data.containsKey("courseId")) {
@@ -121,5 +140,114 @@ public class StudentService {
         }
 
         return studentRepository.save(student);
+    }
+
+    private StudentRegistrationRequest normalizeAndValidate(
+            StudentRegistrationRequest request,
+            Set<String> seenEmails,
+            Set<String> seenStudentNumbers) {
+        if (request == null) {
+            throw new IllegalArgumentException("Student registration payload is required");
+        }
+
+        String email = trimToNull(request.getEmail());
+        String fullName = trimToNull(request.getFullName());
+        String studentNumber = trimToNull(request.getStudentNumber());
+
+        if (email == null) {
+            throw new IllegalArgumentException("Student email is required");
+        }
+        // Password can be null for admin-driven registration (will be auto-generated)
+        if (fullName == null) {
+            throw new IllegalArgumentException("Student fullName is required");
+        }
+        if (!seenEmails.add(email)) {
+            throw new IllegalArgumentException("Duplicate email found in bulk request: " + email);
+        }
+        if (userRepository.existsByEmail(email)) {
+            throw new IllegalArgumentException("Email is already in use: " + email);
+        }
+        if (studentNumber != null) {
+            if (!seenStudentNumbers.add(studentNumber)) {
+                throw new IllegalArgumentException("Duplicate student number found in bulk request: " + studentNumber);
+            }
+            if (studentRepository.existsByStudentNumber(studentNumber)) {
+                throw new IllegalArgumentException("Student number is already in use: " + studentNumber);
+            }
+        }
+
+        StudentRegistrationRequest normalizedRequest = new StudentRegistrationRequest();
+        normalizedRequest.setEmail(email);
+        normalizedRequest.setPassword(request.getPassword());
+        normalizedRequest.setFullName(fullName);
+        normalizedRequest.setCourseId(request.getCourseId());
+        normalizedRequest.setClassGroupId(request.getClassGroupId());
+        normalizedRequest.setStudentNumber(studentNumber);
+        return normalizedRequest;
+    }
+
+    private Student createStudent(StudentRegistrationRequest request) {
+        String password = request.getPassword();
+        boolean mustReset = false;
+        if (password == null || password.isBlank()) {
+            password = passwordService.generateTemporaryPassword();
+            mustReset = true;
+            emailService.sendTemporaryPassword(request.getEmail(), password);
+        }
+
+        String passwordHash = passwordEncoder.encode(password);
+        User user = User.builder()
+                .email(request.getEmail())
+                .passwordHash(passwordHash)
+                .role(UserTypes.STUDENT)
+                .name(request.getFullName())
+                .mustResetPassword(mustReset)
+                .build();
+        userRepository.save(user);
+        passwordService.recordPassword(user, passwordHash);
+
+        Course course = request.getCourseId() != null
+                ? courseRepository.findById(request.getCourseId())
+                .orElseThrow(() -> new RuntimeException("Course not found with id: " + request.getCourseId()))
+                : null;
+
+        ClassGroup classGroup = request.getClassGroupId() != null
+                ? classGroupRepository.findById(request.getClassGroupId())
+                .orElseThrow(() -> new RuntimeException("Class Group not found with id: " + request.getClassGroupId()))
+                : null;
+
+        String[] nameParts = request.getFullName().split("\\s+", 2);
+        String firstName = nameParts[0];
+        String lastName = nameParts.length > 1 ? nameParts[1] : "";
+
+        Student student = Student.builder()
+                .fullName(request.getFullName())
+                .firstName(firstName)
+                .lastName(lastName)
+                .registeredAt(LocalDateTime.now())
+                .studentNumber(request.getStudentNumber())
+                .user(user)
+                .course(course)
+                .classGroup(classGroup)
+                .build();
+
+        return studentRepository.save(student);
+    }
+
+    @Transactional
+    public void deleteStudent(Long id) {
+        Student student = studentRepository.findById(id)
+                .orElseThrow(() -> new RuntimeException("Student not found with id: " + id));
+        
+        // Due to CascadeType.ALL on User relationship, deleting the student will delete the user
+        studentRepository.delete(student);
+    }
+
+    private String trimToNull(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
     }
 }

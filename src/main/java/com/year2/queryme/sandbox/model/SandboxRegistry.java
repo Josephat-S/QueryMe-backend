@@ -9,7 +9,13 @@ import java.time.LocalDateTime;
 import java.util.UUID;
 
 @Entity
-@Table(name = "sandbox_registry")
+@Table(
+    name = "sandbox_registry",
+    indexes = {
+        @Index(name = "idx_sandbox_exam_student", columnList = "exam_id, student_id"),
+        @Index(name = "idx_sandbox_status_expires", columnList = "status, expires_at")
+    }
+)
 @Data
 @NoArgsConstructor
 public class SandboxRegistry {
@@ -29,6 +35,9 @@ public class SandboxRegistry {
 
     @Column(name = "db_user", nullable = false, length = 100)
     private String dbUser;
+
+    @Column(name = "seed_fingerprint", length = 64)
+    private String seedFingerprint;
 
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)

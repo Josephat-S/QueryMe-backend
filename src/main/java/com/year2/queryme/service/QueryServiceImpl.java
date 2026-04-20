@@ -7,13 +7,13 @@ import com.year2.queryme.model.Question;
 import com.year2.queryme.model.Submission;
 import com.year2.queryme.model.dto.SubmissionRequest;
 import com.year2.queryme.model.dto.SubmissionResponse;
+import com.year2.queryme.model.enums.UserTypes;
 import com.year2.queryme.model.enums.VisibilityMode;
 import com.year2.queryme.repository.AnswerKeyRepository;
 import com.year2.queryme.repository.ExamRepository;
 import com.year2.queryme.repository.ExamSessionRepository;
 import com.year2.queryme.repository.QuestionRepository;
 import com.year2.queryme.repository.SubmissionRepository;
-import com.year2.queryme.sandbox.dto.SandboxConnectionInfo;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.year2.queryme.sandbox.service.SandboxService;
@@ -21,7 +21,6 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.QueryTimeoutException;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.Map;
@@ -43,9 +42,9 @@ public class QueryServiceImpl implements QueryService {
     private final ExamRepository examRepository;
     private final ObjectMapper objectMapper;
     private final CurrentUserService currentUserService;
+    private final SqlDialectAdapter sqlDialectAdapter;
 
     @Override
-    @Transactional
     public SubmissionResponse submitQuery(SubmissionRequest request) {
         log.info("Processing submission for student {} question {}", request.getStudentId(), request.getQuestionId());
         Submission.SubmissionBuilder submissionBuilder = Submission.builder()
@@ -84,32 +83,32 @@ public class QueryServiceImpl implements QueryService {
             submissionBuilder.sessionId(java.util.UUID.fromString(activeSession.getId()));
             persistSubmission = true;
 
-            // 1. Validate blocklist
-            queryValidator.validate(request.getQuery());
+            // 1. Resolve sandbox schema, preferring the active session value to avoid registry lookups.
+            String sandboxSchema = resolveSandboxSchema(activeSession, request);
 
-            // 2. Get Sandbox connection details
-            SandboxConnectionInfo sandboxInfo = sandboxService.getSandboxConnectionDetails(
-                request.getExamId(), request.getStudentId());
+            String adaptedQuery = sqlDialectAdapter.adaptForExecution(request.getQuery());
+            String executableQuery = sqlDialectAdapter.ensureFinalStatementReturnsRows(adaptedQuery);
 
-            // 3. Executed Sandboxed Query
-            List<Map<String, Object>> studentResult = queryExecutor.executeSandboxedQuery(
-                sandboxInfo.schemaName(), request.getQuery(), 10); // 10s hard timeout
+            // 2. Validate sandbox-scoped SQL
+            queryValidator.validate(executableQuery, sandboxSchema, false);
+
+            // 3. Execute sandboxed SQL atomically inside the student's schema
+            SandboxExecutionResult executionResult = queryExecutor.executeSandboxedScript(
+                sandboxSchema, executableQuery, 10, false); // 10s hard timeout
+            List<Map<String, Object>> studentResult = executionResult.rows();
                 
             // 4. Compare ResultSets
             Boolean orderSensitive = question.getOrderSensitive() != null ? question.getOrderSensitive() : false;
             boolean isCorrect = resultSetComparator.compare(studentResult, answerKey.getExpectedRows(), orderSensitive);
-            List<String> resultColumns = studentResult.isEmpty()
-                    ? List.of()
-                    : List.copyOf(studentResult.get(0).keySet());
+            List<String> resultColumns = executionResult.columns();
             
             int finalScore = 0;
             if (isCorrect) {
                 finalScore = question.getMarks();
             } else if (Boolean.TRUE.equals(question.getPartialMarks())) {
                 // PARTIAL MARKS logic: if result count matches, give 50%
-                List<Map<String, Object>> expectedData = new com.fasterxml.jackson.databind.ObjectMapper()
-                    .readValue(answerKey.getExpectedRows(), new com.fasterxml.jackson.core.type.TypeReference<>() {});
-                if (studentResult.size() == expectedData.size()) {
+                int expectedRowCount = objectMapper.readTree(answerKey.getExpectedRows()).size();
+                if (studentResult.size() == expectedRowCount) {
                     finalScore = question.getMarks() / 2;
                     submissionBuilder.executionError("Partial Credit: Row count matches, but data is incorrect.");
                 }
@@ -139,18 +138,23 @@ public class QueryServiceImpl implements QueryService {
 
         // 5. Save the Submission
         Submission submission = submissionRepository.save(submissionBuilder.build());
-        resultService.processNewSubmission(submission.getId());
+        resultService.processNewSubmission(submission, question);
+        boolean immediateResultsVisible = exam.getVisibilityMode() == VisibilityMode.IMMEDIATE;
+        boolean studentCaller = currentUserService.hasRole(UserTypes.STUDENT);
+        String executionError = (!studentCaller || immediateResultsVisible)
+                ? submission.getExecutionError()
+                : null;
 
         return SubmissionResponse.builder()
             .submissionId(submission.getId())
             .sessionId(submission.getSessionId())
-            .isCorrect(exam.getVisibilityMode() == VisibilityMode.IMMEDIATE ? submission.getIsCorrect() : null)
-            .score(exam.getVisibilityMode() == VisibilityMode.IMMEDIATE ? submission.getScore() : null)
-            .executionError(submission.getExecutionError())
-            .resultsVisible(exam.getVisibilityMode() == VisibilityMode.IMMEDIATE)
-            .resultColumns(exam.getVisibilityMode() == VisibilityMode.IMMEDIATE
+            .isCorrect(immediateResultsVisible ? submission.getIsCorrect() : null)
+            .score(immediateResultsVisible ? submission.getScore() : null)
+            .executionError(executionError)
+            .resultsVisible(immediateResultsVisible)
+            .resultColumns(immediateResultsVisible
                     ? parseColumns(submission.getResultColumns()) : null)
-            .resultRows(exam.getVisibilityMode() == VisibilityMode.IMMEDIATE
+            .resultRows(immediateResultsVisible
                     ? parseRows(submission.getResultRows()) : null)
             .build();
     }
@@ -185,6 +189,14 @@ public class QueryServiceImpl implements QueryService {
         if (session.getExpiresAt() != null && java.time.LocalDateTime.now().isAfter(session.getExpiresAt())) {
             throw new IllegalArgumentException("Session has expired");
         }
+    }
+
+    private String resolveSandboxSchema(ExamSession activeSession, SubmissionRequest request) {
+        if (activeSession.getSandboxSchema() != null && !activeSession.getSandboxSchema().isBlank()) {
+            return activeSession.getSandboxSchema();
+        }
+
+        return sandboxService.getSandboxConnectionDetails(request.getExamId(), request.getStudentId()).schemaName();
     }
 
     private List<String> parseColumns(String json) {

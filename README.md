@@ -6,7 +6,7 @@ The backend is organized as a modular monolith around the intended project flow:
 
 - teachers create exams and questions
 - each student attempt gets a private PostgreSQL schema
-- student SQL is graded by result-set comparison, not query-string matching
+- student SQL scripts are graded by final result-set comparison, not query-string matching
 - results are exposed according to the exam visibility mode
 
 This README is backend-focused and grouped by the team/module ownership described in the project brief.
@@ -74,9 +74,93 @@ These backend changes now match the intended QueryMe flow more closely:
 - starting a session provisions the sandbox automatically
 - session expiry is auto-submitted on a scheduler and tears the sandbox down
 - query submissions are tied to a session, not just an exam/student pair
+- query submissions can now include sandbox-scoped write and DDL statements without affecting other sandboxes or system schemas
 - query submit responses only include marks/result sets when the exam visibility mode allows it
+- query validation and execution failures now return through `SubmissionResponse.executionError` instead of surfacing as rollback-only transaction errors
 - student result views are built from the latest submission per question for that session
 - manual sandbox provisioning now returns the real configured connection info instead of a hard-coded DB user
+- query execution now adapts common MySQL syntax (`\`` identifiers, `IFNULL`, `LIMIT offset,count`, and simple MySQL DDL table options) to PostgreSQL-compatible SQL before validation/execution
+- final `INSERT`/`UPDATE`/`DELETE` statements now auto-append `RETURNING *` when omitted, so DML questions can still produce a comparable result set
+
+## Recent Performance Changes (April 2026)
+
+This backend received a performance-focused update. No brand-new API paths were introduced, but several existing endpoints and internals were improved for lower latency and better scaling.
+
+### What Changed Internally
+
+- reduced repeated authenticated-user lookups by reusing JWT principal details in `CurrentUserService`
+- optimized exam listing to avoid per-exam question-count queries by batching question counts
+- optimized teacher dashboard assembly by using projection queries (lightweight row views) instead of full entity loading
+- optimized submission processing to reuse the active session sandbox schema when available
+- reduced object allocations in partial-mark scoring logic
+- disabled verbose SQL logging in runtime config to reduce request-path I/O noise
+
+### Database Indexes Added
+
+Indexes were added via JPA entity metadata and are applied by Hibernate with the current `ddl-auto: update` strategy.
+
+- `submissions`
+  - `(exam_id, submitted_at)`
+  - `(session_id, submitted_at)`
+  - `(student_id, exam_id)`
+  - `(question_id)`
+- `exam_sessions`
+  - `(exam_id)`
+  - `(student_id)`
+  - `(exam_id, student_id, started_at)`
+  - `(submitted_at, expires_at)`
+- `questions`
+  - `(exam_id, order_index)`
+  - `(exam_id)`
+- `exams`
+  - `(course_id)`
+  - `(status)`
+  - `(course_id, status)`
+- `results`
+  - `(submission_id)`
+  - `(session_id)`
+  - `(exam_id, question_id)`
+- `sandbox_registry`
+  - `(exam_id, student_id)`
+  - `(status, expires_at)`
+
+### API Behavior Updates
+
+- list-style endpoints now support Spring pageable query params: `page`, `size`, `sort`
+- these endpoints now return paged JSON objects (`Page<T>`) instead of raw arrays
+- endpoint paths are unchanged (no new route paths were added for pagination)
+
+Paged endpoints:
+
+- `GET /students`
+- `GET /teachers`
+- `GET /admins`
+- `GET /guests`
+- `GET /courses`
+- `GET /class-groups`
+- `GET /class-groups/course/{courseId}`
+- `GET /course-enrollments`
+- `GET /course-enrollments/course/{courseId}`
+- `GET /course-enrollments/student/{studentId}`
+- `GET /exams/{examId}/questions`
+- `GET /sessions/exam/{examId}`
+- `GET /sessions/student/{studentId}`
+
+Paged response shape follows Spring Data defaults, including fields such as:
+
+- `content`
+- `number`
+- `size`
+- `totalElements`
+- `totalPages`
+- `first`
+- `last`
+
+Example:
+
+```http
+GET /students?page=0&size=20&sort=id,desc
+```
 
 ## Group Ownership Map
 
@@ -144,6 +228,7 @@ These endpoints own profile records, course structure, and teacher-driven studen
 | `PUT` | `/teachers/{id}` | Updates a teacher profile. | `TEACHER` or `ADMIN` |
 | `GET` | `/teachers` | Lists teachers. | `TEACHER` or `ADMIN` |
 | `POST` | `/students/register` | Creates a student profile. | `TEACHER` or `ADMIN` |
+| `POST` | `/students/register/bulk` | Creates multiple student profiles atomically from an array of student registration payloads. | `TEACHER` or `ADMIN` |
 | `PUT` | `/students/{id}` | Updates student profile fields such as name, password, course, and class group. | `STUDENT`, `TEACHER`, or `ADMIN` |
 | `GET` | `/students` | Lists students. | `TEACHER` or `ADMIN` |
 | `GET` | `/students/{id}` | Fetches one student profile by numeric student-table id. | `STUDENT`, `TEACHER`, or `ADMIN` |
@@ -162,6 +247,17 @@ These endpoints own profile records, course structure, and teacher-driven studen
 | `GET` | `/course-enrollments/course/{courseId}` | Lists enrollments for one course. | `TEACHER` or `ADMIN` |
 | `GET` | `/course-enrollments/student/{studentId}` | Lists enrollments for one student. | `TEACHER` or `ADMIN` |
 | `DELETE` | `/course-enrollments` | Removes an enrollment. Accepts the same identifier formats as the create endpoint. | `TEACHER` or `ADMIN` |
+
+Student registration payloads support:
+
+- `email`
+- `password`
+- `fullName`
+- optional `courseId`
+- optional `classGroupId`
+- optional `student_number` or `studentNumber`
+
+`POST /students/register/bulk` accepts a JSON array of those payloads and rolls the whole request back if any student in the batch fails validation or hits a duplicate email/student number.
 
 ### Additional Account Endpoints Present in the Codebase
 
@@ -231,9 +327,9 @@ When a teacher creates or updates a question, the service:
 
 1. saves the question
 2. provisions a temporary sandbox seeded from the exam dataset
-3. runs the teacher's `referenceQuery`
-4. stores the normalized answer key JSON
-5. tears the sandbox down
+3. runs the teacher's `referenceQuery` script inside that sandbox
+4. stores the normalized answer key JSON from the final returned result set
+5. rolls back reference-script mutations before keeping or cleaning up the preview sandbox
 
 `QuestionRequest` supports:
 
@@ -252,6 +348,8 @@ When a teacher creates or updates a question, the service:
 
 Notes:
 
+- `referenceQuery` can be a sandbox-scoped multi-statement script.
+- for DML reference queries (`INSERT`/`UPDATE`/`DELETE`), the backend automatically appends `RETURNING *` to the final statement when omitted.
 - Students can only fetch questions for exams that are published and assigned to them.
 - Student-facing question payloads hide `referenceQuery`.
 - If answer-key generation fails, question creation or update fails as well.
@@ -311,9 +409,10 @@ Base path: `/sandboxes`
 Notes:
 
 - The normal student flow should use `/sessions/start`, not manual sandbox provisioning.
+- Sandbox endpoints take the numeric student profile id and resolve it to the auth user UUID internally.
 - Sandbox schema names now follow the exam/student identity pattern instead of relying on a local README-only sequence.
 - Sandbox connection info comes from the configured sandbox data source.
-- Optional hardening mode can provision a dedicated PostgreSQL role per sandbox (`SANDBOX_DB_USER_ISOLATION_ENABLED=true`) with restricted schema access and automatic role cleanup on teardown.
+- Optional hardening mode can provision a dedicated PostgreSQL role per sandbox (`SANDBOX_DB_USER_ISOLATION_ENABLED=true`) with schema-local DML/DDL permissions, restricted sandbox access, and automatic role cleanup on teardown.
 
 ## Group G - Query Engine
 
@@ -335,25 +434,47 @@ What happens during grading:
 
 1. the service validates that the question belongs to the supplied exam
 2. the active exam session is resolved and validated
-3. the SQL is checked against the blocklist
-4. the student's sandbox is resolved
-5. the SQL runs with a hard 10-second timeout
-6. the result set is compared to the stored answer key
+3. the student's sandbox is resolved
+4. the SQL is validated against sandbox-safety rules
+5. the SQL script runs atomically inside the student's sandbox with a hard 10-second timeout
+6. the final returned result set is compared to the stored answer key
 7. a submission row is saved with score, correctness, and captured result-set JSON
 8. the results module is notified so the `results` table stays synchronized
 
 Submission SQL constraints in current implementation:
 
-- only read-style queries (`SELECT` / `WITH`) are accepted
-- multi-statement submissions are rejected
-- SQL comments in submissions are rejected
-- destructive/admin keywords are blocked
+- allowed commands include `SELECT`, `WITH`, `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE`, `CREATE TABLE/VIEW/INDEX`, `ALTER TABLE`, and `DROP TABLE/VIEW/INDEX`
+- multi-statement submissions are allowed
+- every referenced object must stay inside the current student's sandbox schema
+- `public`, `information_schema`, `pg_*`, and other students' `exam_*` schemas are blocked
+- SQL comments and dollar-quoted blocks are rejected
+- system-level commands such as `GRANT`, `REVOKE`, `COPY`, `VACUUM`, `CALL`, and similar commands are blocked
+- temporary and unlogged objects are blocked
+
+MySQL compatibility in current implementation:
+
+- backtick-quoted identifiers are converted to PostgreSQL double-quoted identifiers before validation
+- `IFNULL(expr, fallback)` is converted to `COALESCE(expr, fallback)`
+- MySQL `LIMIT offset, count` is converted to PostgreSQL `LIMIT count OFFSET offset`
+- basic MySQL table options in `CREATE TABLE` (for example `ENGINE=...`) are stripped for PostgreSQL execution
+- when the final statement is `INSERT`, `UPDATE`, or `DELETE` without `RETURNING`, the backend appends `RETURNING *` automatically
+
+Teacher authoring checklist (MySQL-first cohorts):
+
+- Prefer standard SQL where possible (`SELECT`, `JOIN`, `GROUP BY`, `ORDER BY`, `INSERT`, `UPDATE`, `DELETE`)
+- MySQL-style backticks and `IFNULL` are supported, but avoid relying on MySQL-only procedural features
+- For pagination examples, `LIMIT offset, count` is accepted and auto-translated
+- For DML questions, you can omit `RETURNING`; the backend adds `RETURNING *` on the final DML statement
+- Keep each question deterministic and independent; avoid side effects that change expected outputs for later questions
+- Avoid unsupported patterns such as SQL comments, dollar-quoted blocks, and system-level statements (`GRANT`, `REVOKE`, `COPY`, `VACUUM`, `CALL`, and similar commands)
+- This remains a PostgreSQL execution sandbox; compatibility is best-effort for common MySQL learning syntax, not full MySQL runtime behavior
 
 Current scoring behavior:
 
-- exact match: full marks
+- exact match of the final returned result set: full marks
 - `partialMarks = true` and matching row count: half marks
-- blocklist failure, timeout, or execution failure: returned as `executionError`
+- validation failure, timeout, or execution failure: returned as `executionError`
+- if the final student statement is `INSERT`/`UPDATE`/`DELETE` without `RETURNING`, the backend adds `RETURNING *` automatically before execution and grading
 
 `SubmissionResponse` includes:
 
@@ -371,6 +492,10 @@ Visibility behavior on submit:
 - `IMMEDIATE`: returns score, correctness, and result-set data right away
 - `END_OF_EXAM`: saves the submission, but withholds marks and result rows from the submit response
 - `NEVER`: saves the submission, but withholds marks and result rows from the submit response
+
+Additional submit behavior:
+
+- sandbox validation and execution failures are reported in a normal `SubmissionResponse` instead of bubbling up as rollback-only transaction errors
 
 ## Group C - Results Module
 
@@ -441,3 +566,95 @@ These are still worth knowing while working on the backend:
 - `GET /students/{id}` enforces student self-access while teacher/admin can read any student
 - partial marking is intentionally simple right now: half marks when row count matches and `partialMarks` is enabled
 - there is still no dedicated backend feature for revealing teacher reference queries to students after an exam, which matches the project brief's nice-to-have scope rather than its must-have scope
+
+## Frontend Migration Checklist
+
+Use this when wiring the frontend to the current backend shape.
+
+- update list views to read `content` from Spring `Page<T>` responses instead of treating responses as raw arrays
+- read pagination metadata from `number`, `size`, `totalElements`, and `totalPages` when building list tables
+- pass `page`, `size`, and `sort` query params to the paged endpoints when fetching large lists
+- keep using the existing endpoint paths; only the response shape changed for list endpoints
+- handle hidden student fields correctly:
+  - `seedSql` is still hidden from student-facing exam responses
+  - `referenceQuery` is still hidden from student-facing question responses
+- render teacher dashboard rows from `GET /results/exam/{examId}/dashboard` as a paged or filtered table if the result set becomes large in the UI layer
+- prefer human-readable course, exam, and student names in the portal UI instead of exposing internal numeric IDs directly
+
+Useful examples:
+
+```http
+GET /students?page=0&size=20&sort=id,desc
+GET /exams/published?page=0&size=10&sort=createdAt,desc
+GET /sessions/exam/{examId}?page=0&size=25
+```
+
+## QueryMe Feedbacks - Group J (Auth) - Implementation Summary
+
+This section documents the security and user management enhancements implemented in April 2026.
+
+### 1. Auto-generated Temporary Passwords & Real Email Delivery
+- **Feature**: Admins can now register users without defining a password.
+- **Implementation**: 
+    - `PasswordService` generates a secure 16-character temporary password.
+    - `EmailService` sends this password to the user's real email address using **Spring Mail** (configured via `.env`).
+- **How to test**:
+    - **Endpoint**: `POST /students/register`
+    - **Payload**: Provide `email` and `fullName` but leave out the `password` field.
+    - **Result**: The user receives an email with their credentials, and a fallback copy is printed to the server logs.
+
+### 2. Forced Password Reset (First Login)
+- **Feature**: Users who receive a temporary password must change it before they can use the system.
+- **Implementation**: 
+    - Login via `POST /auth/signin` returns `"mustResetPassword": true`.
+    - This flag is cleared automatically after the user completes a profile update with a new password.
+- **How to test**:
+    - Sign in with a temporary password from Step 1.
+    - Observe the `mustResetPassword` flag in the response JSON.
+
+### 3. Strict Admin-Only Registration
+- **Feature**: Only the `ADMIN` role can create new user profiles. Teachers no longer have registration rights.
+- **Implementation**: Security rules in `SecurityConfig` and `@PreAuthorize` annotations in controllers.
+- **How to test**:
+    - Try calling `POST /students/register` using a `TEACHER` token.
+    - **Result**: `403 Forbidden`.
+
+### 4. Password History & Reuse Prevention
+- **Feature**: Users cannot reuse any of their previously used passwords.
+- **Implementation**: `PasswordHistory` entity records all previous password hashes. Checks are enforced during every password update.
+- **How to test**:
+    - Call `PUT /students/{id}` with a new password (e.g., `NewPass123!`).
+    - Attempt a second update with the same password (`NewPass123!`).
+    - **Result**: `400 Bad Request` with message: `"Cannot reuse a previous password"`.
+
+### 5. Restricted Public Signup
+- **Feature**: The public `/auth/signup` endpoint is now strictly reserved for students.
+- **How to test**:
+    - Call `POST /auth/signup` with `"role": "TEACHER"`.
+    - **Result**: Rejected with `"Error: Public signup only supports STUDENT accounts"`.
+
+### 6. Admin Student Deletion
+- **Feature**: Added a new administrative endpoint to remove students and their linked user accounts.
+- **How to test**:
+    - **Endpoint**: `DELETE /students/{id}`
+    - **Access**: `ADMIN` only.
+    - **Result**: Student profile and user credentials are removed via cascading deletion.
+
+### 7. Super Admin Reset (Utility)
+- **Feature**: Added a temporary utility to reset the super admin status if credentials are lost.
+- **Endpoint**: `POST /auth/bootstrap/reset` (Public).
+
+- sandbox validation and execution failures are reported in a normal `SubmissionResponse` instead of bubbling up as rollback-only transaction errors
+
+### API Endpoint Summary Table (New & Updated)
+
+| Method | Endpoint | Implementation Detail | Access |
+|---|---|---|---|
+| `POST` | `/auth/signin` | Returns JWT and `mustResetPassword` status | Public |
+| `POST` | `/auth/signup` | Self-registration, restricted to `STUDENT` | Public |
+| `POST` | `/auth/bootstrap/reset` | Resets super admin status for re-bootstrapping | Public |
+| `POST` | `/students/register` | Creates student + temp password + email | `ADMIN` only |
+| `DELETE` | `/students/{id}` | Permanently removes student and user account | `ADMIN` only |
+| `PUT` | `/students/{id}`| Updates profile and enforces password history | Owner/`ADMIN` |
+| `POST` | `/teachers/register`| Creates teacher + temp password + email | `ADMIN` only |
+| `POST` | `/guests/register`| Creates guest + temp password + email | `ADMIN` only |

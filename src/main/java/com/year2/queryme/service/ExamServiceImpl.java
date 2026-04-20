@@ -8,14 +8,18 @@ import com.year2.queryme.model.enums.UserTypes;
 import com.year2.queryme.model.mapper.ExamMapper;
 import com.year2.queryme.repository.CourseEnrollmentRepository;
 import com.year2.queryme.repository.ExamRepository;
+import com.year2.queryme.repository.QuestionRepository;
 import com.year2.queryme.repository.StudentRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Objects;
+import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 @Service
@@ -26,6 +30,7 @@ public class ExamServiceImpl implements ExamService {
     private final CurrentUserService currentUserService;
     private final StudentRepository studentRepository;
     private final CourseEnrollmentRepository courseEnrollmentRepository;
+    private final QuestionRepository questionRepository;
 
     @Override
     public ExamResponse createExam(CreateExamRequest request) {
@@ -62,19 +67,12 @@ public class ExamServiceImpl implements ExamService {
                 ? examRepository.findByCourseIdAndStatus(courseId, ExamStatus.PUBLISHED)
                 : examRepository.findByCourseId(courseId);
 
-        return exams.stream()
-                .filter(this::canCurrentUserAccessExam)
-                .map(this::toResponse)
-                .collect(Collectors.toList());
+        return toResponsesForCurrentUser(exams);
     }
 
     @Override
     public List<ExamResponse> getPublishedExams() {
-        return examRepository.findByStatus(ExamStatus.PUBLISHED)
-                .stream()
-                .filter(this::canCurrentUserAccessExam)
-                .map(this::toResponse)
-                .collect(Collectors.toList());
+        return toResponsesForCurrentUser(examRepository.findByStatus(ExamStatus.PUBLISHED));
     }
 
     @Override
@@ -159,10 +157,73 @@ public class ExamServiceImpl implements ExamService {
 
     private ExamResponse toResponse(Exam exam) {
         ExamResponse response = ExamMapper.toResponse(exam);
+        int questionCount = Math.toIntExact(questionRepository.countByExamId(java.util.UUID.fromString(exam.getId())));
+        response.setQuestionCount(questionCount);
+        response.setQuestionsCount(questionCount);
         if (currentUserService.hasRole(UserTypes.STUDENT)) {
             response.setSeedSql(null);
         }
         return response;
+    }
+
+    private ExamResponse toResponse(Exam exam, Integer questionCount) {
+        ExamResponse response = ExamMapper.toResponse(exam);
+        int safeQuestionCount = questionCount != null ? questionCount : 0;
+        response.setQuestionCount(safeQuestionCount);
+        response.setQuestionsCount(safeQuestionCount);
+        if (currentUserService.hasRole(UserTypes.STUDENT)) {
+            response.setSeedSql(null);
+        }
+        return response;
+    }
+
+    private List<ExamResponse> toResponsesForCurrentUser(List<Exam> exams) {
+        if (exams.isEmpty()) {
+            return List.of();
+        }
+
+        Map<String, Integer> questionCounts = loadQuestionCounts(exams);
+        boolean studentCaller = currentUserService.hasRole(UserTypes.STUDENT);
+
+        if (!studentCaller) {
+            return exams.stream()
+                    .map(exam -> toResponse(exam, questionCounts.get(exam.getId())))
+                    .collect(Collectors.toList());
+        }
+
+        StudentAccessContext accessContext = resolveStudentAccessContext();
+        return exams.stream()
+                .filter(exam -> canCurrentUserAccessExam(exam, accessContext))
+                .map(exam -> toResponse(exam, questionCounts.get(exam.getId())))
+                .collect(Collectors.toList());
+    }
+
+    private Map<String, Integer> loadQuestionCounts(List<Exam> exams) {
+        List<UUID> examIds = exams.stream()
+                .map(exam -> UUID.fromString(exam.getId()))
+                .toList();
+
+        if (examIds.isEmpty()) {
+            return Map.of();
+        }
+
+        Map<String, Integer> counts = new LinkedHashMap<>();
+        for (Object[] row : questionRepository.countByExamIds(examIds)) {
+            counts.put(row[0].toString(), ((Number) row[1]).intValue());
+        }
+        return counts;
+    }
+
+    private StudentAccessContext resolveStudentAccessContext() {
+        Student student = studentRepository.findByUser_Id(currentUserService.requireCurrentUserId())
+                .orElseThrow(() -> new RuntimeException("Student profile not found"));
+
+        Set<String> enrolledCourseIds = courseEnrollmentRepository.findByStudentId(student.getId())
+                .stream()
+                .map(enrollment -> enrollment.getCourse().getId().toString())
+                .collect(Collectors.toSet());
+
+        return new StudentAccessContext(student, enrolledCourseIds);
     }
 
     private void assertCurrentUserCanAccessExam(Exam exam) {
@@ -180,18 +241,18 @@ public class ExamServiceImpl implements ExamService {
             return false;
         }
 
-        Student student = studentRepository.findByUser_Id(currentUserService.requireCurrentUserId())
-                .orElseThrow(() -> new RuntimeException("Student profile not found"));
+        return canCurrentUserAccessExam(exam, resolveStudentAccessContext());
+    }
 
-        if (student.getCourse() != null && Objects.equals(student.getCourse().getId().toString(), exam.getCourseId())) {
+    private boolean canCurrentUserAccessExam(Exam exam, StudentAccessContext accessContext) {
+        if (accessContext.student().getCourse() != null
+                && Objects.equals(accessContext.student().getCourse().getId().toString(), exam.getCourseId())) {
             return true;
         }
 
-        Set<String> enrolledCourseIds = courseEnrollmentRepository.findByStudentId(student.getId())
-                .stream()
-                .map(enrollment -> enrollment.getCourse().getId().toString())
-                .collect(Collectors.toSet());
+        return accessContext.enrolledCourseIds().contains(exam.getCourseId());
+    }
 
-        return enrolledCourseIds.contains(exam.getCourseId());
+    private record StudentAccessContext(Student student, Set<String> enrolledCourseIds) {
     }
 }
