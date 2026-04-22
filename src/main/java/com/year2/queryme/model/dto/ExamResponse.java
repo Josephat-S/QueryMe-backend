@@ -18,6 +18,7 @@ public class ExamResponse {
     private Integer maxAttempts;
     private Integer questionCount;
     private Integer questionsCount;
+    private Integer totalMarks;
     private String seedSql;
     private String courseName;
     private Instant createdAt;

@@ -26,6 +26,8 @@ public interface QuestionRepository extends JpaRepository<Question, UUID> {
             """)
     List<QuestionSummaryView> findQuestionSummariesByExamId(@Param("examId") UUID examId);
     long countByExamId(UUID examId);
+    @Query("select sum(q.marks) from Question q where q.examId = :examId")
+    Integer sumMarksByExamId(@Param("examId") UUID examId);
 
     @Query("select q.examId, count(q) from Question q where q.examId in :examIds group by q.examId")
     List<Object[]> countByExamIds(@Param("examIds") Collection<UUID> examIds);

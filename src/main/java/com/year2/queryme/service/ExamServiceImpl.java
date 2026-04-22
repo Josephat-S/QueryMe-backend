@@ -232,23 +232,27 @@ public class ExamServiceImpl implements ExamService {
                 .ifPresent(course -> response.setCourseName(course.getName()));
 
         int questionCount = Math.toIntExact(questionRepository.countByExamId(java.util.UUID.fromString(exam.getId())));
+        Integer totalMarks = questionRepository.sumMarksByExamId(java.util.UUID.fromString(exam.getId()));
         response.setQuestionCount(questionCount);
         response.setQuestionsCount(questionCount);
+        response.setTotalMarks(totalMarks != null ? totalMarks : 0);
         if (currentUserService.hasRole(UserTypes.STUDENT)) {
             response.setSeedSql(null);
         }
         return response;
     }
 
-    private ExamResponse toResponse(Exam exam, Integer questionCount) {
+    private ExamResponse toResponse(Exam exam, ExamSummary summary) {
         ExamResponse response = ExamMapper.toResponse(exam);
 
         courseRepository.findById(Long.parseLong(exam.getCourseId()))
                 .ifPresent(course -> response.setCourseName(course.getName()));
 
-        int safeQuestionCount = questionCount != null ? questionCount : 0;
+        int safeQuestionCount = summary != null ? summary.count() : 0;
+        int safeTotalMarks = summary != null ? summary.totalMarks() : 0;
         response.setQuestionCount(safeQuestionCount);
         response.setQuestionsCount(safeQuestionCount);
+        response.setTotalMarks(safeTotalMarks);
         if (currentUserService.hasRole(UserTypes.STUDENT)) {
             response.setSeedSql(null);
         }
@@ -260,23 +264,25 @@ public class ExamServiceImpl implements ExamService {
             return List.of();
         }
 
-        Map<String, Integer> questionCounts = loadQuestionCounts(exams);
+        Map<String, ExamSummary> summaries = loadExamSummaries(exams);
         boolean studentCaller = currentUserService.hasRole(UserTypes.STUDENT);
 
         if (!studentCaller) {
             return exams.stream()
-                    .map(exam -> toResponse(exam, questionCounts.get(exam.getId())))
+                    .map(exam -> toResponse(exam, summaries.get(exam.getId())))
                     .collect(Collectors.toList());
         }
 
         StudentAccessContext accessContext = resolveStudentAccessContext();
         return exams.stream()
                 .filter(exam -> canCurrentUserAccessExam(exam, accessContext))
-                .map(exam -> toResponse(exam, questionCounts.get(exam.getId())))
+                .map(exam -> toResponse(exam, summaries.get(exam.getId())))
                 .collect(Collectors.toList());
     }
 
-    private Map<String, Integer> loadQuestionCounts(List<Exam> exams) {
+    private record ExamSummary(int count, int totalMarks) {}
+
+    private Map<String, ExamSummary> loadExamSummaries(List<Exam> exams) {
         List<UUID> examIds = exams.stream()
                 .map(exam -> UUID.fromString(exam.getId()))
                 .toList();
@@ -285,11 +291,25 @@ public class ExamServiceImpl implements ExamService {
             return Map.of();
         }
 
-        Map<String, Integer> counts = new LinkedHashMap<>();
+        Map<String, ExamSummary> summaries = new LinkedHashMap<>();
+        // Fetch counts
         for (Object[] row : questionRepository.countByExamIds(examIds)) {
-            counts.put(row[0].toString(), ((Number) row[1]).intValue());
+            String examId = row[0].toString();
+            int count = ((Number) row[1]).intValue();
+            summaries.put(examId, new ExamSummary(count, 0));
         }
-        return counts;
+
+        // Fetch total marks for each (could be optimized with a single query, but let's keep it simple for now)
+        for (Exam exam : exams) {
+            Integer totalMarks = questionRepository.sumMarksByExamId(UUID.fromString(exam.getId()));
+            ExamSummary existing = summaries.get(exam.getId());
+            summaries.put(exam.getId(), new ExamSummary(
+                existing != null ? existing.count() : 0,
+                totalMarks != null ? totalMarks : 0
+            ));
+        }
+        
+        return summaries;
     }
 
     private StudentAccessContext resolveStudentAccessContext() {
